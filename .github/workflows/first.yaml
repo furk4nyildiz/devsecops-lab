@@ -1,48 +1,37 @@
-name: Security Pipeline
+name: CI-CD Security Pipeline
 
 on:
-  push:
-    branches: [ "main", "master" ]
   pull_request:
+    branches: [ "main", "test" ]
+  push:
+    branches: [ "main", "test" ]
 
 permissions:
-  contents: read
+  contents: write          # create-pull-request için
+  pull-requests: write
   security-events: write
 
 jobs:
-  codeql:
-    name: CodeQL Static Analysis
+  # 1) SECURITY GATE - Tüm PR'lar için (main ve test)
+  security_gate:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      contents: read
-      security-events: write
-    strategy:
-      fail-fast: false
-      matrix:
-        language: [ 'javascript', 'python' ] # Projene göre güncelle
+
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Initialize CodeQL
+      # CodeQL - SAST (parlatan kısım)
+      - name: Init CodeQL
         uses: github/codeql-action/init@v3
         with:
-          languages: ${{ matrix.language }}
-
+          languages: javascript # Projene göre güncelle (örn: javascript,python)
       - name: Autobuild
         uses: github/codeql-action/autobuild@v3
-
-      - name: Perform CodeQL Analysis
+      - name: CodeQL Analyze
         uses: github/codeql-action/analyze@v3
 
-  sast_semgrep:
-    name: SAST - Semgrep
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
+      # Semgrep - Ek SAST
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -55,34 +44,22 @@ jobs:
 
       - name: Run Semgrep
         run: |
-          semgrep --config auto --sarif --output semgrep.sarif || true
+          semgrep --config auto --error --sarif --output semgrep.sarif
 
       - name: Upload Semgrep SARIF
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: semgrep.sarif
 
-  code_quality:
-    name: Code Quality - Super Linter
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Run Super-Linter
+      # Code Quality - Super Linter
+      - name: Run Super Linter
         uses: github/super-linter/slim@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VALIDATE_ALL_CODEBASE: true
           DEFAULT_BRANCH: main
 
-  dockerfile_lint:
-    name: Dockerfile Lint - Hadolint
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
+      # Dockerfile Quality - Hadolint
       - name: Install Hadolint
         run: |
           wget -O /usr/local/bin/hadolint https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64
@@ -92,13 +69,7 @@ jobs:
         run: |
           if [ -f Dockerfile ]; then hadolint Dockerfile; fi
 
-  container_scan:
-    name: Container / Dependency Scan - Trivy
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
+      # Container / Dependency Scan - Trivy
       - name: Install Trivy
         run: |
           sudo apt-get update -y
@@ -108,29 +79,65 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y trivy
 
-      - name: Trivy FS (kod + bağımlılıklar)
+      - name: Trivy FS Scan (vuln+config)
         run: |
-          trivy fs . --security-checks vuln,config --format sarif --output trivy.sarif || true
+          trivy fs . \
+            --security-checks vuln,config \
+            --severity HIGH,CRITICAL \
+            --exit-code 1 \
+            --format sarif \
+            --output trivy.sarif
 
       - name: Upload Trivy SARIF
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy.sarif
 
-  secret_scan:
-    name: Secret Scan - Gitleaks
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
+      # Secret Scan - Gitleaks
       - name: Run Gitleaks
         uses: gitleaks/gitleaks-action@v2
         with:
-          args: detect --source . --report-format sarif --report-path gitleaks.sarif || true
+          args: detect --source . --report-format sarif --report-path gitleaks.sarif
 
       - name: Upload Gitleaks SARIF
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: gitleaks.sarif
 
+  # 2) MAIN -> TEST OTOMATİK PROMOTION (main'e push sonrası)
+  promote_to_test:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create PR from main to test
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          title: "Promote main to test"
+          body: "Auto-generated promotion PR from main to test after successful merge."
+          base: test
+          head: main
+          branch: auto/promote-main-to-test
+          labels: |
+            auto-promote
+            staging
+
+  # 3) TEST -> DEPLOY (test'e merge olunca otomatik deploy)
+  deploy_from_test:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/test'
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Buraya gerçek deploy komutlarını koyuyorsun (Docker, K8s, SSH vs.)
+      - name: Run deploy script
+        run: |
+          echo "Deploying from test to production..."
+          # ./deploy.sh
