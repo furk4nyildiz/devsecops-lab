@@ -7,9 +7,10 @@ on:
     branches: [ "main", "test" ]
 
 permissions:
-  contents: write          # create-pull-request için
+  contents: write          # create-pull-request ve checkout için
   pull-requests: write
-  security-events: write
+  security-events: write   # SARIF upload için şart
+  actions: read            # CodeQL / upload-sarif "Resource not accessible" fix
 
 jobs:
   # 1) SECURITY GATE - Tüm PR'lar için (main ve test)
@@ -17,17 +18,22 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
 
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # CodeQL - SAST (parlatan kısım)
+      # CodeQL - SAST
       - name: Init CodeQL
         uses: github/codeql-action/init@v3
         with:
-          languages: javascript # Projene göre güncelle (örn: javascript,python)
+          languages: javascript
+
       - name: Autobuild
         uses: github/codeql-action/autobuild@v3
+
       - name: CodeQL Analyze
         uses: github/codeql-action/analyze@v3
 
@@ -120,13 +126,13 @@ jobs:
           title: "Promote main to test"
           body: "Auto-generated promotion PR from main to test after successful merge."
           base: test
-          head: main
           branch: auto/promote-main-to-test
+          # head default olarak branch parametresini kullanacak (auto/promote-main-to-test)
           labels: |
             auto-promote
             staging
 
-  # 3) TEST -> DEPLOY (test'e merge olunca otomatik deploy)
+  # 3) TEST -> DEPLOY (test'e push olunca otomatik deploy)
   deploy_from_test:
     if: github.event_name == 'push' && github.ref == 'refs/heads/test'
     runs-on: ubuntu-latest
@@ -136,7 +142,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Buraya gerçek deploy komutlarını koyuyorsun (Docker, K8s, SSH vs.)
       - name: Run deploy script
         run: |
           echo "Deploying from test to production..."
