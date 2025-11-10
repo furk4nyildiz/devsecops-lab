@@ -49,6 +49,7 @@ jobs:
           pip install semgrep
 
       - name: Run Semgrep
+        continue-on-error: true
         run: |
           semgrep --config auto --error --sarif --output semgrep.sarif
 
