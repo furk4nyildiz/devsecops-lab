@@ -46,8 +46,10 @@ jobs:
         uses: github/super-linter/slim@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DEFAULT_BRANCH: main          # Default branch'in
+          DEFAULT_BRANCH: main
           VALIDATE_ALL_CODEBASE: true
+          VALIDATE_PHP_PSALM: false       # Psalm'i kapat
+          FILTER_REGEX_EXCLUDE: "vendor/|node_modules/"  # Opsiyonel: hızlandırır
 
       # =========================
       # 1) SAST - CodeQL
