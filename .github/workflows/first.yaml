@@ -3,17 +3,17 @@ name: DevSecOps Security Gate & Auto Promotion
 on:
   pull_request:
     types: [closed]
-    branches: [ "master" ]  # master'a merge edildiğinde tetiklenir
+    branches: [ "master" ]  # Sadece master'a merge edilen PR'lar
 
 permissions:
-  contents: write          # otomatik merge için
+  contents: write          # Otomatik merge için
   pull-requests: write
   security-events: write   # SARIF upload için
   actions: read
 
 jobs:
   security_gate:
-    name: Security Gate - SAST / Secrets / Container
+    name: Security Gate - Lint / SAST / Secrets / Container
     # Sadece merge edilmiş PR + PR sahibi sensen çalışsın
     if: >
       github.event.pull_request.merged == true &&
@@ -21,10 +21,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # --------------------------------
+      # Kodu ve tüm branch geçmişini çek
+      # --------------------------------
       - name: Checkout master (merged state)
         uses: actions/checkout@v4
         with:
           ref: master
+          fetch-depth: 0  # Super-Linter ve karşılaştırmalar için gerekli
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -36,10 +40,24 @@ jobs:
         with:
           python-version: '3.11'
 
-      # ========= 1) SAST - CodeQL =========
+      # =========================
+      # 0) Super-Linter (Code Quality)
+      # =========================
+      - name: Run Super-Linter
+        id: super_linter
+        uses: github/super-linter/slim@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BRANCH: main          # Senin default branch'in
+          VALIDATE_ALL_CODEBASE: true   # Tüm kodu tara
+
+      # =========================
+      # 1) SAST - CodeQL
+      # =========================
       - name: Init CodeQL
         uses: github/codeql-action/init@v3
         with:
+          # Projene göre güncelle (javascript, python, java, go vs.)
           languages: javascript
 
       - name: CodeQL Autobuild
@@ -50,7 +68,9 @@ jobs:
         with:
           category: "/language:javascript"
 
-      # ========= 2) SAST - Semgrep =========
+      # =========================
+      # 2) SAST - Semgrep
+      # =========================
       - name: Install Semgrep
         run: |
           python -m pip install --upgrade pip
@@ -70,7 +90,9 @@ jobs:
         with:
           sarif_file: semgrep.sarif
 
-      # ========= 3) Container Scan - Trivy =========
+      # =========================
+      # 3) Container Image Scan - Trivy
+      # =========================
       - name: Build Docker image
         run: docker build -t app-image .
 
@@ -92,11 +114,15 @@ jobs:
         with:
           sarif_file: trivy.sarif
 
-      # ========= 4) Secret Scan - Gitleaks =========
+      # =========================
+      # 4) Secret Scan - Gitleaks
+      # =========================
       - name: Run Gitleaks
         id: gitleaks
         continue-on-error: true
         uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           args: detect --source . \
                        --report-format sarif \
@@ -108,26 +134,38 @@ jobs:
         with:
           sarif_file: gitleaks.sarif
 
-      # ========= 5) Security Gate Kararı =========
+      # =========================
+      # 5) Security Gate Kararı
+      # =========================
       - name: Evaluate Security Gate
         if: always()
         run: |
-          echo "Semgrep outcome: ${{ steps.semgrep.outcome }}"
-          echo "Trivy outcome:   ${{ steps.trivy.outcome }}"
-          echo "Gitleaks outcome:${{ steps.gitleaks.outcome }}"
+          echo "Super-Linter outcome: ${{ steps.super_linter.outcome }}"
+          echo "Semgrep outcome:      ${{ steps.semgrep.outcome }}"
+          echo "Trivy outcome:        ${{ steps.trivy.outcome }}"
+          echo "Gitleaks outcome:     ${{ steps.gitleaks.outcome }}"
 
           fail=0
 
+          # Super-Linter fail ise gate kapansın
+          if [ "${{ steps.super_linter.outcome }}" = "failure" ]; then
+            echo "::error::Super-Linter hatalar buldu (gate failed)."
+            fail=1
+          fi
+
+          # Semgrep (kritik SAST)
           if [ "${{ steps.semgrep.outcome }}" = "failure" ]; then
             echo "::error::Semgrep kritik bulgular raporladı (gate failed)."
             fail=1
           fi
 
+          # Trivy (CRITICAL/HIGH)
           if [ "${{ steps.trivy.outcome }}" = "failure" ]; then
             echo "::error::Trivy CRITICAL/HIGH zafiyet buldu (gate failed)."
             fail=1
           fi
 
+          # Gitleaks (secret)
           if [ "${{ steps.gitleaks.outcome }}" = "failure" ]; then
             echo "::error::Gitleaks secret buldu (gate failed)."
             fail=1
@@ -140,6 +178,9 @@ jobs:
             echo "Security gate: PASSED"
           fi
 
+  # =========================
+  # master -> test
+  # =========================
   promote_master_to_test:
     name: Auto merge master -> test
     needs: security_gate
@@ -153,6 +194,9 @@ jobs:
           base: test
           commit_message: "chore: auto-merge master into test [skip ci]"
 
+  # =========================
+  # test -> main
+  # =========================
   promote_test_to_main:
     name: Auto merge test -> main
     needs: promote_master_to_test
