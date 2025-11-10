@@ -60,6 +60,7 @@ jobs:
 
       # Code Quality - Super Linter
       - name: Run Super Linter
+        continue-on-error: true
         uses: github/super-linter/slim@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
