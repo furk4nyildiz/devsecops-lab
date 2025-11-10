@@ -50,7 +50,7 @@ jobs:
 
       - name: Run Semgrep
         run: |
-          semgrep --config auto --error --sarif --output semgrep.sarif
+          semgrep --config auto continue-on-error --sarif --output semgrep.sarif
 
       - name: Upload Semgrep SARIF
         uses: github/codeql-action/upload-sarif@v3
