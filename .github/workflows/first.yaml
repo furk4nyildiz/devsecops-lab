@@ -3,27 +3,25 @@ name: DevSecOps Security Gate & Auto Promotion
 on:
   pull_request:
     types: [closed]
-    branches: [ "master" ]  # Sadece master'a merge edilen PR'lar
+    branches: [ "master" ]  # master'a merge edilen tüm PR'lar tetikler
 
 permissions:
-  contents: write          # Otomatik merge için
+  contents: write
   pull-requests: write
-  security-events: write   # SARIF upload için
+  security-events: write
   actions: read
 
 jobs:
   security_gate:
     name: Security Gate - Lint / SAST / Secrets / Container
-    # Sadece merge edilmiş PR + PR sahibi sensen çalışsın
-    if: >
-      github.event.pull_request.merged == true &&
-      github.event.pull_request.user.login == 'furk4nyildiz'
+    # Sadece merge edilmiş PR'larda çalış
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
 
     steps:
-      # --------------------------------
-      # Kodu ve tüm branch geçmişini çek
-      # --------------------------------
+      # ----------------------------
+      # Kodu ve branch geçmişini çek
+      # ----------------------------
       - name: Checkout master (merged state)
         uses: actions/checkout@v4
         with:
@@ -48,8 +46,8 @@ jobs:
         uses: github/super-linter/slim@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DEFAULT_BRANCH: main          # Senin default branch'in
-          VALIDATE_ALL_CODEBASE: true   # Tüm kodu tara
+          DEFAULT_BRANCH: main          # Default branch'in
+          VALIDATE_ALL_CODEBASE: true
 
       # =========================
       # 1) SAST - CodeQL
@@ -57,7 +55,7 @@ jobs:
       - name: Init CodeQL
         uses: github/codeql-action/init@v3
         with:
-          # Projene göre güncelle (javascript, python, java, go vs.)
+          # Demo için JavaScript; projene göre ekleyebilirsin
           languages: javascript
 
       - name: CodeQL Autobuild
@@ -77,6 +75,7 @@ jobs:
           pip install semgrep
 
       - name: Run Semgrep
+        id: semgrep
         continue-on-error: true
         run: |
           semgrep --config "p/ci" \
@@ -98,9 +97,10 @@ jobs:
       - name: Run Trivy image scan
         id: trivy
         continue-on-error: true
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@0.33.1
         with:
-          image-ref: app-image
+          scan-type: 'image'
+          image-ref: 'app-image'
           format: 'sarif'
           output: 'trivy.sarif'
           vuln-type: 'os,library'
@@ -146,25 +146,21 @@ jobs:
 
           fail=0
 
-          # Super-Linter fail ise gate kapansın
           if [ "${{ steps.super_linter.outcome }}" = "failure" ]; then
             echo "::error::Super-Linter hatalar buldu (gate failed)."
             fail=1
           fi
 
-          # Semgrep (kritik SAST)
           if [ "${{ steps.semgrep.outcome }}" = "failure" ]; then
             echo "::error::Semgrep kritik bulgular raporladı (gate failed)."
             fail=1
           fi
 
-          # Trivy (CRITICAL/HIGH)
           if [ "${{ steps.trivy.outcome }}" = "failure" ]; then
             echo "::error::Trivy CRITICAL/HIGH zafiyet buldu (gate failed)."
             fail=1
           fi
 
-          # Gitleaks (secret)
           if [ "${{ steps.gitleaks.outcome }}" = "failure" ]; then
             echo "::error::Gitleaks secret buldu (gate failed)."
             fail=1
